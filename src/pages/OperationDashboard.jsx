@@ -64,7 +64,6 @@ function StockWidgets() {
 
   useEffect(() => {
     async function load() {
-      setLoading(true)
       const { data } = await supabase
         .from('stock_levels')
         .select('sku_id, quantity, skus(sku_code)')
@@ -74,14 +73,19 @@ function StockWidgets() {
     }
     load()
 
-    // Keep widgets fresh as orders/dispatch/RTO/etc change stock elsewhere in the app
+    // Keep widgets fresh as orders/dispatch/RTO/etc change stock elsewhere in the app.
+    // Realtime is the fast path; a periodic poll is a fallback in case a realtime
+    // event is ever missed (e.g. a dropped WebSocket reconnecting silently).
     const channel = supabase
       .channel('stock_widgets_stock_levels')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_levels' }, load)
       .subscribe()
 
+    const pollInterval = setInterval(load, 15000)
+
     return () => {
       supabase.removeChannel(channel)
+      clearInterval(pollInterval)
     }
   }, [])
 
@@ -727,14 +731,20 @@ function PackagingPanel({ currentUserId }) {
     loadSkus()
     loadStock()
 
-    // Keep the warehouse-count column live as stock changes elsewhere in the app
+    // Keep the warehouse-count column live as stock changes elsewhere in the app.
+    // Realtime is the fast path; a periodic poll is a fallback in case a realtime
+    // event is ever missed (e.g. a dropped WebSocket reconnecting silently) — this
+    // number feeds the Close Warehouse match check, so it must never go stale.
     const channel = supabase
       .channel('packaging_panel_stock_levels')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_levels' }, loadStock)
       .subscribe()
 
+    const pollInterval = setInterval(loadStock, 15000)
+
     return () => {
       supabase.removeChannel(channel)
+      clearInterval(pollInterval)
     }
   }, [])
 
