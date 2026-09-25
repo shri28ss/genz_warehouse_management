@@ -665,6 +665,7 @@ function ManualOrderPanel({ currentUserId }) {
 function PackagingPanel({ currentUserId }) {
   const [logDate, setLogDate] = useState(new Date().toISOString().slice(0, 10))
   const [skus, setSkus] = useState([])
+  const [stockBySku, setStockBySku] = useState({})
   const [skuId, setSkuId] = useState('')
   const [stage, setStage] = useState(PACKAGING_STAGES[0].value)
   const [quantity, setQuantity] = useState('')
@@ -674,12 +675,30 @@ function PackagingPanel({ currentUserId }) {
   const [editValue, setEditValue] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
+  async function loadStock() {
+    const { data } = await supabase.from('stock_levels').select('sku_id, quantity')
+    const map = {}
+    for (const r of data || []) map[r.sku_id] = r.quantity
+    setStockBySku(map)
+  }
+
   useEffect(() => {
     async function loadSkus() {
       const { data } = await supabase.from('skus').select('id, sku_code').eq('is_active', true).order('sku_code')
       setSkus(data || [])
     }
     loadSkus()
+    loadStock()
+
+    // Keep the warehouse-count column live as stock changes elsewhere in the app
+    const channel = supabase
+      .channel('packaging_panel_stock_levels')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_levels' }, loadStock)
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   async function loadTotals(date) {
@@ -754,6 +773,8 @@ function PackagingPanel({ currentUserId }) {
       <p className="hint">
         Log any stage directly — e.g. a 3L order packed as 3×1L bottles can be entered straight into
         "Box bubble wrap" without going through earlier stages first. Click any total below to correct it.
+        "Warehouse Stock" is the live current stock for that SKU — use it to cross-check packaging/dispatch
+        counts against what's actually left in the warehouse.
       </p>
       <form className="inline-form" onSubmit={submitEntry}>
         <input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
@@ -792,12 +813,14 @@ function PackagingPanel({ currentUserId }) {
               total += v
             })
             row.total = total
+            row.warehouse_stock = stockBySku[s.id] ?? 0
             return row
           })}
           columns={[
             { key: 'sku', label: 'SKU' },
             ...PACKAGING_STAGES.map((s) => ({ key: s.value, label: s.label })),
             { key: 'total', label: 'Total' },
+            { key: 'warehouse_stock', label: 'Warehouse Stock' },
           ]}
         />
       </div>
@@ -809,6 +832,7 @@ function PackagingPanel({ currentUserId }) {
               <th key={s.value}>{s.label}</th>
             ))}
             <th>Total</th>
+            <th>Warehouse Stock</th>
           </tr>
         </thead>
         <tbody>
@@ -843,6 +867,7 @@ function PackagingPanel({ currentUserId }) {
                   )
                 })}
                 <td><strong>{rowTotal}</strong></td>
+                <td>{stockBySku[s.id] ?? 0}</td>
               </tr>
             )
           })}
