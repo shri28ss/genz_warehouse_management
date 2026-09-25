@@ -38,6 +38,11 @@ export default function ClientDashboard() {
   }, [selectedDate])
 
   const totalStock = useMemo(() => stock.reduce((sum, r) => sum + r.quantity, 0), [stock])
+  const totalMl = useMemo(
+    () => stock.reduce((sum, r) => sum + r.quantity * (r.skus?.size_ml || 0), 0),
+    [stock]
+  )
+  const totalLitres = totalMl / 1000
   const totalDispatchedToday = useMemo(
     () => dispatchSummary.reduce((sum, r) => sum + r.total_units, 0),
     [dispatchSummary]
@@ -61,6 +66,14 @@ export default function ClientDashboard() {
         <div className="stat-tile">
           <span className="stat-tile-label">Total stock on hand</span>
           <span className="stat-tile-value">{totalStock.toLocaleString()}</span>
+        </div>
+        <div className="stat-tile">
+          <span className="stat-tile-label">Total volume available</span>
+          <span className="stat-tile-value">{totalLitres.toLocaleString(undefined, { maximumFractionDigits: 2 })} L</span>
+        </div>
+        <div className="stat-tile">
+          <span className="stat-tile-label">Total volume available (ml)</span>
+          <span className="stat-tile-value">{totalMl.toLocaleString()} ml</span>
         </div>
         <div className="stat-tile">
           <span className="stat-tile-label">Units dispatched — {selectedDate}</span>
@@ -90,26 +103,41 @@ export default function ClientDashboard() {
                   product: r.skus?.products?.name,
                   size_ml: r.skus?.size_ml,
                   quantity: r.quantity,
+                  total_ml: r.quantity * (r.skus?.size_ml || 0),
+                  total_l: (r.quantity * (r.skus?.size_ml || 0)) / 1000,
                 }))}
                 columns={[
                   { key: 'product', label: 'Product' },
                   { key: 'size_ml', label: 'Size (ml)' },
                   { key: 'quantity', label: 'Available Quantity' },
+                  { key: 'total_ml', label: 'Total Volume (ml)' },
+                  { key: 'total_l', label: 'Total Volume (L)' },
                 ]}
               />
             </div>
             <table>
             <thead>
-              <tr><th>Product</th><th>Size (ml)</th><th>Available quantity</th></tr>
+              <tr>
+                <th>Product</th>
+                <th>Size (ml)</th>
+                <th>Available quantity</th>
+                <th>Total volume (ml)</th>
+                <th>Total volume (L)</th>
+              </tr>
             </thead>
             <tbody>
-              {stock.map((r) => (
-                <tr key={r.sku_id}>
-                  <td>{r.skus?.products?.name}</td>
-                  <td>{r.skus?.size_ml}</td>
-                  <td>{r.quantity}</td>
-                </tr>
-              ))}
+              {stock.map((r) => {
+                const rowMl = r.quantity * (r.skus?.size_ml || 0)
+                return (
+                  <tr key={r.sku_id}>
+                    <td>{r.skus?.products?.name}</td>
+                    <td>{r.skus?.size_ml}</td>
+                    <td>{r.quantity}</td>
+                    <td>{rowMl.toLocaleString()}</td>
+                    <td>{(rowMl / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                  </tr>
+                )
+              })}
             </tbody>
             </table>
           </>
