@@ -677,6 +677,9 @@ function ManualOrderPanel({ currentUserId }) {
 }
 
 const MANUAL_PACKAGING_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched' && s.value !== 'leak')
+// Stages that are still physically in the warehouse — everything except 'dispatched',
+// which has already left. This is what should sum to the current warehouse stock.
+const IN_WAREHOUSE_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched')
 
 function PackagingPanel({ currentUserId }) {
   const [logDate, setLogDate] = useState(new Date().toISOString().slice(0, 10))
@@ -789,8 +792,11 @@ function PackagingPanel({ currentUserId }) {
     return totals.find((t) => t.sku_id === skuId && t.stage === stageValue)?.total_quantity || 0
   }
 
+  // "Total" = what's still physically in the warehouse (raw + all packaging
+  // stages + leak). Dispatched is excluded — those bottles already left, so
+  // including them would make Total exceed Warehouse Stock, which is wrong.
   function packagingGrandTotal(skuId) {
-    return PACKAGING_STAGES.reduce((sum, stg) => sum + currentTotal(skuId, stg.value), 0)
+    return IN_WAREHOUSE_STAGES.reduce((sum, stg) => sum + currentTotal(skuId, stg.value), 0)
   }
 
   async function closeWarehouse() {
@@ -902,13 +908,10 @@ function PackagingPanel({ currentUserId }) {
           filename={`packaging-tally-${logDate}`}
           rows={skus.map((s) => {
             const row = { sku: s.sku_code }
-            let total = 0
             PACKAGING_STAGES.forEach((stg) => {
-              const v = currentTotal(s.id, stg.value)
-              row[stg.value] = v
-              total += v
+              row[stg.value] = currentTotal(s.id, stg.value)
             })
-            row.total = total
+            row.total = packagingGrandTotal(s.id)
             row.warehouse_stock = stockBySku[s.id] ?? 0
             return row
           })}
@@ -933,7 +936,7 @@ function PackagingPanel({ currentUserId }) {
         </thead>
         <tbody>
           {skus.map((s) => {
-            const rowTotal = PACKAGING_STAGES.reduce((sum, stg) => sum + currentTotal(s.id, stg.value), 0)
+            const rowTotal = packagingGrandTotal(s.id)
             return (
               <tr key={s.id}>
                 <td>{s.sku_code}</td>
