@@ -27,6 +27,9 @@ export default function OperationDashboard() {
         <button className={tab === 'rto' ? 'active' : ''} onClick={() => setTab('rto')}>
           RTO
         </button>
+        <button className={tab === 'leak' ? 'active' : ''} onClick={() => setTab('leak')}>
+          Leak
+        </button>
         <button className={tab === 'order-log' ? 'active' : ''} onClick={() => setTab('order-log')}>
           Order Log
         </button>
@@ -46,6 +49,7 @@ export default function OperationDashboard() {
       {tab === 'packaging' && <PackagingPanel currentUserId={profile.id} />}
       {tab === 'dispatch' && <DispatchPanel currentUserId={profile.id} />}
       {tab === 'rto' && <RtoPanel currentUserId={profile.id} />}
+      {tab === 'leak' && <LeakPanel currentUserId={profile.id} />}
       {tab === 'order-log' && <OrderLogPanel />}
       {tab === 'closure-log' && <ClosureLogPanel />}
       {tab === 'stock' && <StockPanel />}
@@ -108,6 +112,7 @@ const PACKAGING_STAGES = [
   { value: 'box_packed', label: 'Box packed' },
   { value: 'box_bubble_wrap', label: 'Box bubble wrap' },
   { value: 'box_labeled', label: 'Box labeled' },
+  { value: 'leak', label: 'Leak / damage' },
   { value: 'dispatched', label: 'Dispatched' },
 ]
 
@@ -667,13 +672,14 @@ function ManualOrderPanel({ currentUserId }) {
   )
 }
 
-const MANUAL_PACKAGING_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched')
+const MANUAL_PACKAGING_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched' && s.value !== 'leak')
 
 function PackagingPanel({ currentUserId }) {
   const [logDate, setLogDate] = useState(new Date().toISOString().slice(0, 10))
   const [skus, setSkus] = useState([])
   const [stockBySku, setStockBySku] = useState({})
   const [dispatchedBySku, setDispatchedBySku] = useState({})
+  const [leakBySku, setLeakBySku] = useState({})
   const [skuId, setSkuId] = useState('')
   const [stage, setStage] = useState(MANUAL_PACKAGING_STAGES[0].value)
   const [quantity, setQuantity] = useState('')
@@ -701,6 +707,16 @@ function PackagingPanel({ currentUserId }) {
     const map = {}
     for (const r of data || []) map[r.sku_id] = r.total_units
     setDispatchedBySku(map)
+  }
+
+  async function loadLeak(date) {
+    const { data } = await supabase
+      .from('leak_daily_totals')
+      .select('sku_id, total_quantity')
+      .eq('leak_date', date)
+    const map = {}
+    for (const r of data || []) map[r.sku_id] = r.total_quantity
+    setLeakBySku(map)
   }
 
   useEffect(() => {
@@ -733,6 +749,7 @@ function PackagingPanel({ currentUserId }) {
   useEffect(() => {
     loadTotals(logDate)
     loadDispatched(logDate)
+    loadLeak(logDate)
     setCloseResult(null)
   }, [logDate])
 
@@ -758,6 +775,7 @@ function PackagingPanel({ currentUserId }) {
 
   function currentTotal(skuId, stageValue) {
     if (stageValue === 'dispatched') return dispatchedBySku[skuId] || 0
+    if (stageValue === 'leak') return leakBySku[skuId] || 0
     return totals.find((t) => t.sku_id === skuId && t.stage === stageValue)?.total_quantity || 0
   }
 
@@ -775,6 +793,9 @@ function PackagingPanel({ currentUserId }) {
         for (const stg of MANUAL_PACKAGING_STAGES) {
           manualTotals[s.id][stg.value] = currentTotal(s.id, stg.value)
         }
+        // 'leak' is fetched from the Leak tab (not manually punched here),
+        // but still counts toward the reconciliation total like a manual stage.
+        manualTotals[s.id].leak = currentTotal(s.id, 'leak')
       }
       const { data, error } = await supabase.rpc('close_warehouse', {
         p_closure_date: logDate,
@@ -838,7 +859,8 @@ function PackagingPanel({ currentUserId }) {
         Log any stage directly — e.g. a 3L order packed as 3×1L bottles can be entered straight into
         "Box bubble wrap" without going through earlier stages first. Click any total below to correct it.
         "Warehouse Stock" is the live current stock for that SKU — use it to cross-check packaging/dispatch
-        counts against what's actually left in the warehouse.
+        counts against what's actually left in the warehouse. "Dispatched" and "Leak / damage" are read-only
+        here — they're pulled automatically from the Dispatch and Leak tabs.
       </p>
       <form className="inline-form" onSubmit={submitEntry}>
         <input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
@@ -909,6 +931,13 @@ function PackagingPanel({ currentUserId }) {
                   if (stg.value === 'dispatched') {
                     return (
                       <td key={stg.value} title="Auto-filled from Dispatch tab">
+                        {currentTotal(s.id, stg.value)}
+                      </td>
+                    )
+                  }
+                  if (stg.value === 'leak') {
+                    return (
+                      <td key={stg.value} title="Auto-filled from Leak tab">
                         {currentTotal(s.id, stg.value)}
                       </td>
                     )
@@ -1341,6 +1370,186 @@ function RtoPanel({ currentUserId }) {
               <td>{skus.find((s) => s.id === r.sku_id)?.sku_code}</td>
               <td>{r.quantity_returned}</td>
               <td>{r.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LeakPanel({ currentUserId }) {
+  const [skus, setSkus] = useState([])
+  const [entries, setEntries] = useState([])
+  const [form, setForm] = useState({ sku_id: '', quantity: '', note: '' })
+  const [submitting, setSubmitting] = useState(false)
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10))
+  const [editingId, setEditingId] = useState(null)
+  const [editQty, setEditQty] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+
+  async function loadSkus() {
+    const { data } = await supabase.from('skus').select('id, sku_code').eq('is_active', true).order('sku_code')
+    setSkus(data || [])
+  }
+
+  async function loadEntries(date) {
+    const { data } = await supabase
+      .from('leak_entries')
+      .select('id, sku_id, quantity, note, leak_date')
+      .eq('leak_date', date)
+      .order('created_at', { ascending: false })
+    setEntries(data || [])
+  }
+
+  useEffect(() => {
+    loadSkus()
+  }, [])
+
+  useEffect(() => {
+    loadEntries(selectedDate)
+  }, [selectedDate])
+
+  async function submitEntry(e) {
+    e.preventDefault()
+    if (!form.sku_id || !form.quantity) return
+    setSubmitting(true)
+    const { error } = await supabase.from('leak_entries').insert({
+      sku_id: form.sku_id,
+      quantity: Number(form.quantity),
+      leak_date: selectedDate,
+      note: form.note || null,
+      recorded_by: currentUserId,
+    })
+    setSubmitting(false)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    setForm({ sku_id: '', quantity: '', note: '' })
+    loadEntries(selectedDate)
+  }
+
+  function startEdit(entry) {
+    setEditingId(entry.id)
+    setEditQty(String(entry.quantity))
+  }
+
+  async function saveEdit(id) {
+    const qty = Number(editQty)
+    if (Number.isNaN(qty) || qty <= 0) return
+    setSavingEdit(true)
+    const { error } = await supabase.from('leak_entries').update({ quantity: qty, updated_at: new Date().toISOString() }).eq('id', id)
+    setSavingEdit(false)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    setEditingId(null)
+    loadEntries(selectedDate)
+  }
+
+  const totalsBySku = skus.map((s) => ({
+    ...s,
+    total: entries.filter((r) => r.sku_id === s.id).reduce((sum, r) => sum + r.quantity, 0),
+  })).filter((s) => s.total > 0)
+
+  return (
+    <div className="panel">
+      <h2>Leak / Damage</h2>
+      <p className="hint">
+        Bottles that leaked or got damaged during packaging — logged here for reference. This is tracking
+        only; it does not change warehouse stock. Pulled automatically into the Daily Packaging Tally / closure
+        reconciliation as its own stage.
+      </p>
+
+      <div className="inline-form" style={{ marginBottom: 16 }}>
+        <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+      </div>
+
+      <form className="inline-form" onSubmit={submitEntry}>
+        <select value={form.sku_id} onChange={(e) => setForm({ ...form, sku_id: e.target.value })}>
+          <option value="">Select SKU</option>
+          {skus.map((s) => (
+            <option key={s.id} value={s.id}>{s.sku_code}</option>
+          ))}
+        </select>
+        <input
+          type="number"
+          placeholder="Quantity"
+          value={form.quantity}
+          onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+        />
+        <input
+          placeholder="Note (optional)"
+          value={form.note}
+          onChange={(e) => setForm({ ...form, note: e.target.value })}
+        />
+        <button type="submit" disabled={submitting}>
+          {submitting ? 'Saving…' : 'Log leak'}
+        </button>
+      </form>
+
+      {totalsBySku.length > 0 && (
+        <div className="widget-row" style={{ marginTop: 16 }}>
+          {totalsBySku.map((s) => (
+            <div className="widget-card" key={s.id}>
+              <span className="widget-value">{s.total}</span>
+              <span className="widget-label">{s.sku_code}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2>Leak Entries for {selectedDate}</h2>
+      <div className="inline-form" style={{ marginBottom: 8 }}>
+        <ExportButton
+          filename={`leak-entries-${selectedDate}`}
+          rows={entries.map((r) => ({
+            sku: skus.find((s) => s.id === r.sku_id)?.sku_code,
+            quantity: r.quantity,
+            note: r.note,
+          }))}
+          columns={[
+            { key: 'sku', label: 'SKU' },
+            { key: 'quantity', label: 'Quantity' },
+            { key: 'note', label: 'Note' },
+          ]}
+        />
+      </div>
+      <table>
+        <thead>
+          <tr><th>SKU</th><th>Qty</th><th>Note</th><th>Edit</th></tr>
+        </thead>
+        <tbody>
+          {entries.map((r) => (
+            <tr key={r.id}>
+              <td>{skus.find((s) => s.id === r.sku_id)?.sku_code}</td>
+              <td>
+                {editingId === r.id ? (
+                  <input
+                    type="number"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.target.value)}
+                    style={{ width: 70 }}
+                  />
+                ) : (
+                  r.quantity
+                )}
+              </td>
+              <td>{r.note}</td>
+              <td>
+                {editingId === r.id ? (
+                  <>
+                    <button type="button" onClick={() => saveEdit(r.id)} disabled={savingEdit}>
+                      {savingEdit ? 'Saving…' : 'Save'}
+                    </button>
+                    <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => startEdit(r)}>Edit</button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
