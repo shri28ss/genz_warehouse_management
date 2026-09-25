@@ -102,6 +102,7 @@ function StockWidgets() {
 }
 
 const PACKAGING_STAGES = [
+  { value: 'raw_unpacked', label: 'Raw bottles (unpacked)' },
   { value: 'bottle_plastic_wrap', label: 'Bottle plastic wrap' },
   { value: 'bottle_bubble_wrap', label: 'Bottle bubble wrap' },
   { value: 'box_packed', label: 'Box packed' },
