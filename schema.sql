@@ -253,7 +253,8 @@ create table packaging_daily_log (
   log_date date not null default current_date,
   sku_id uuid not null references skus(id),
   stage packaging_stage not null,
-  quantity integer not null check (quantity > 0), -- count added in this entry (incremental punch)
+  quantity integer not null check (quantity != 0), -- delta for this entry; negative deltas
+                                                     -- happen when a cell is edited down
   recorded_by uuid not null references profiles(id),
   created_at timestamptz not null default now()
 );
