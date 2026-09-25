@@ -30,6 +30,9 @@ export default function OperationDashboard() {
         <button className={tab === 'order-log' ? 'active' : ''} onClick={() => setTab('order-log')}>
           Order Log
         </button>
+        <button className={tab === 'closure-log' ? 'active' : ''} onClick={() => setTab('closure-log')}>
+          Closure Log
+        </button>
         <button className={tab === 'stock' ? 'active' : ''} onClick={() => setTab('stock')}>
           Stock Levels
         </button>
@@ -44,6 +47,7 @@ export default function OperationDashboard() {
       {tab === 'dispatch' && <DispatchPanel currentUserId={profile.id} />}
       {tab === 'rto' && <RtoPanel currentUserId={profile.id} />}
       {tab === 'order-log' && <OrderLogPanel />}
+      {tab === 'closure-log' && <ClosureLogPanel />}
       {tab === 'stock' && <StockPanel />}
       {tab === 'raw-stock-history' && <RawStockHistoryPanel />}
     </Layout>
@@ -662,24 +666,40 @@ function ManualOrderPanel({ currentUserId }) {
   )
 }
 
+const MANUAL_PACKAGING_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched')
+
 function PackagingPanel({ currentUserId }) {
   const [logDate, setLogDate] = useState(new Date().toISOString().slice(0, 10))
   const [skus, setSkus] = useState([])
   const [stockBySku, setStockBySku] = useState({})
+  const [dispatchedBySku, setDispatchedBySku] = useState({})
   const [skuId, setSkuId] = useState('')
-  const [stage, setStage] = useState(PACKAGING_STAGES[0].value)
+  const [stage, setStage] = useState(MANUAL_PACKAGING_STAGES[0].value)
   const [quantity, setQuantity] = useState('')
   const [totals, setTotals] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [editingCell, setEditingCell] = useState(null) // `${skuId}:${stage}`
   const [editValue, setEditValue] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [closeNote, setCloseNote] = useState('')
+  const [closing, setClosing] = useState(false)
+  const [closeResult, setCloseResult] = useState(null)
 
   async function loadStock() {
     const { data } = await supabase.from('stock_levels').select('sku_id, quantity')
     const map = {}
     for (const r of data || []) map[r.sku_id] = r.quantity
     setStockBySku(map)
+  }
+
+  async function loadDispatched(date) {
+    const { data } = await supabase
+      .from('scan_fail_summary')
+      .select('sku_id, total_units')
+      .eq('order_date', date)
+    const map = {}
+    for (const r of data || []) map[r.sku_id] = r.total_units
+    setDispatchedBySku(map)
   }
 
   useEffect(() => {
@@ -711,6 +731,8 @@ function PackagingPanel({ currentUserId }) {
 
   useEffect(() => {
     loadTotals(logDate)
+    loadDispatched(logDate)
+    setCloseResult(null)
   }, [logDate])
 
   async function submitEntry(e) {
@@ -734,8 +756,49 @@ function PackagingPanel({ currentUserId }) {
   }
 
   function currentTotal(skuId, stageValue) {
+    if (stageValue === 'dispatched') return dispatchedBySku[skuId] || 0
     return totals.find((t) => t.sku_id === skuId && t.stage === stageValue)?.total_quantity || 0
   }
+
+  function packagingGrandTotal(skuId) {
+    return PACKAGING_STAGES.reduce((sum, stg) => sum + currentTotal(skuId, stg.value), 0)
+  }
+
+  async function closeWarehouse() {
+    setClosing(true)
+    setCloseResult(null)
+    try {
+      const manualTotals = {}
+      for (const s of skus) {
+        manualTotals[s.id] = {}
+        for (const stg of MANUAL_PACKAGING_STAGES) {
+          manualTotals[s.id][stg.value] = currentTotal(s.id, stg.value)
+        }
+      }
+      const { data, error } = await supabase.rpc('close_warehouse', {
+        p_closure_date: logDate,
+        p_manual_stage_totals: manualTotals,
+        p_note: closeNote || null,
+        p_actor_id: currentUserId,
+      })
+      if (error) throw error
+      const row = data?.[0]
+      setCloseResult({
+        ok: true,
+        allMatched: row?.all_matched,
+        message: row?.all_matched
+          ? `Warehouse closed for ${logDate} — all SKUs matched.`
+          : `Warehouse closed for ${logDate} with mismatches, noted.`,
+      })
+      setCloseNote('')
+    } catch (err) {
+      setCloseResult({ ok: false, message: err.message })
+    } finally {
+      setClosing(false)
+    }
+  }
+
+  const anyMismatch = skus.some((s) => packagingGrandTotal(s.id) !== (stockBySku[s.id] ?? 0))
 
   function startEdit(skuId, stageValue) {
     setEditingCell(`${skuId}:${stageValue}`)
@@ -785,7 +848,7 @@ function PackagingPanel({ currentUserId }) {
           ))}
         </select>
         <select value={stage} onChange={(e) => setStage(e.target.value)}>
-          {PACKAGING_STAGES.map((s) => (
+          {MANUAL_PACKAGING_STAGES.map((s) => (
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
@@ -842,6 +905,13 @@ function PackagingPanel({ currentUserId }) {
               <tr key={s.id}>
                 <td>{s.sku_code}</td>
                 {PACKAGING_STAGES.map((stg) => {
+                  if (stg.value === 'dispatched') {
+                    return (
+                      <td key={stg.value} title="Auto-filled from Dispatch tab">
+                        {currentTotal(s.id, stg.value)}
+                      </td>
+                    )
+                  }
                   const key = `${s.id}:${stg.value}`
                   const value = currentTotal(s.id, stg.value)
                   if (editingCell === key) {
@@ -867,12 +937,37 @@ function PackagingPanel({ currentUserId }) {
                   )
                 })}
                 <td><strong>{rowTotal}</strong></td>
-                <td>{stockBySku[s.id] ?? 0}</td>
+                <td style={{ color: rowTotal !== (stockBySku[s.id] ?? 0) ? 'crimson' : 'green' }}>
+                  {stockBySku[s.id] ?? 0}
+                </td>
               </tr>
             )
           })}
         </tbody>
       </table>
+
+      <div className="sub-panel" style={{ marginTop: 16 }}>
+        <strong>Close Warehouse — {logDate}</strong>
+        <p className="hint">
+          {anyMismatch
+            ? 'One or more SKUs don\'t match (shown in red above). Add a note explaining the mismatch to close anyway.'
+            : 'All SKUs match packaging total to warehouse stock. Ready to close.'}
+        </p>
+        {anyMismatch && (
+          <input
+            placeholder="Note (required due to mismatch)"
+            value={closeNote}
+            onChange={(e) => setCloseNote(e.target.value)}
+            style={{ width: '100%', marginBottom: 8, padding: '8px 10px', border: '1px solid #ccc', borderRadius: 4 }}
+          />
+        )}
+        <button type="button" onClick={closeWarehouse} disabled={closing || (anyMismatch && !closeNote.trim())}>
+          {closing ? 'Closing…' : 'Close Warehouse'}
+        </button>
+        {closeResult && (
+          <p className={closeResult.ok ? 'info-text' : 'error-text'}>{closeResult.message}</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -1358,6 +1453,114 @@ function OrderLogPanel() {
               ))}
             </tbody>
           </table>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ClosureLogPanel() {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [dateFilter, setDateFilter] = useState('')
+
+  async function load(date) {
+    setLoading(true)
+    let query = supabase
+      .from('warehouse_closure_log')
+      .select('closure_id, closure_date, all_matched, note, created_at, closed_by_name, sku_code, packaging_total, warehouse_stock, matched')
+    if (date) query = query.eq('closure_date', date)
+    const { data } = await query.order('created_at', { ascending: false })
+    setRows(data || [])
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    load(dateFilter || null)
+  }, [dateFilter])
+
+  // Group by closure_id — each Close Warehouse click is its own entry,
+  // even multiple closures on the same date
+  const closures = []
+  for (const r of rows) {
+    let c = closures.find((c) => c.closure_id === r.closure_id)
+    if (!c) {
+      c = {
+        closure_id: r.closure_id,
+        closure_date: r.closure_date,
+        all_matched: r.all_matched,
+        note: r.note,
+        created_at: r.created_at,
+        closed_by_name: r.closed_by_name,
+        lines: [],
+      }
+      closures.push(c)
+    }
+    c.lines.push(r)
+  }
+
+  return (
+    <div className="panel">
+      <h2>Warehouse Closure Log</h2>
+      <p className="hint">
+        Every "Close Warehouse" click is logged here, even multiple closures on the same date.
+      </p>
+      <div className="inline-form" style={{ marginBottom: 16 }}>
+        <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} />
+        {dateFilter && <button type="button" onClick={() => setDateFilter('')}>Clear filter</button>}
+      </div>
+
+      {loading ? (
+        <p>Loading…</p>
+      ) : closures.length === 0 ? (
+        <p className="hint">No closures found{dateFilter ? ` for ${dateFilter}` : ''}.</p>
+      ) : (
+        <>
+          <div className="inline-form" style={{ marginBottom: 8 }}>
+            <ExportButton
+              filename={`closure-log${dateFilter ? '-' + dateFilter : ''}`}
+              rows={closures.map((c) => ({
+                date: c.closure_date,
+                closed_at: c.created_at,
+                closed_by: c.closed_by_name,
+                matched: c.all_matched,
+                note: c.note,
+                breakdown: c.lines.map((l) => `${l.sku_code}: ${l.packaging_total}/${l.warehouse_stock}${l.matched ? '' : ' ⚠'}`).join('; '),
+              }))}
+              columns={[
+                { key: 'date', label: 'Date' },
+                { key: 'closed_at', label: 'Closed At' },
+                { key: 'closed_by', label: 'Closed By' },
+                { key: 'matched', label: 'All Matched' },
+                { key: 'note', label: 'Note' },
+                { key: 'breakdown', label: 'SKU Breakdown (Packaging/Stock)' },
+              ]}
+            />
+          </div>
+          {closures.map((c) => (
+            <div key={c.closure_id} className="sub-panel" style={{ marginBottom: 12 }}>
+              <strong style={{ color: c.all_matched ? 'green' : 'crimson' }}>
+                {c.closure_date} — {new Date(c.created_at).toLocaleTimeString()} — {c.all_matched ? 'All matched' : 'Mismatch'}
+              </strong>
+              {' '}by {c.closed_by_name}
+              {c.note && <p className="hint">Note: {c.note}</p>}
+              <table style={{ marginTop: 8 }}>
+                <thead>
+                  <tr><th>SKU</th><th>Packaging Total</th><th>Warehouse Stock</th><th>Matched</th></tr>
+                </thead>
+                <tbody>
+                  {c.lines.map((l) => (
+                    <tr key={l.sku_code}>
+                      <td>{l.sku_code}</td>
+                      <td>{l.packaging_total}</td>
+                      <td>{l.warehouse_stock}</td>
+                      <td style={{ color: l.matched ? 'green' : 'crimson' }}>{l.matched ? 'Yes' : 'No'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
         </>
       )}
     </div>
