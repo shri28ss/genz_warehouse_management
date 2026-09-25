@@ -23,12 +23,16 @@ export default function AdminDashboard() {
         <button className={tab === 'stock' ? 'active' : ''} onClick={() => setTab('stock')}>
           Current Stock
         </button>
+        <button className={tab === 'raw-material-audit' ? 'active' : ''} onClick={() => setTab('raw-material-audit')}>
+          Raw Material Audit
+        </button>
       </nav>
 
       {tab === 'users' && <UsersPanel currentUserId={profile.id} />}
       {tab === 'products' && <ProductsPanel />}
       {tab === 'raw-stock' && <RawStockPanel currentUserId={profile.id} />}
       {tab === 'stock' && <StockPanel />}
+      {tab === 'raw-material-audit' && <RawMaterialAuditPanel currentUserId={profile.id} />}
     </Layout>
   )
 }
@@ -667,6 +671,151 @@ function StockPanel() {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function RawMaterialAuditPanel({ currentUserId }) {
+  const [products, setProducts] = useState([])
+  const [entries, setEntries] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [form, setForm] = useState({ batch_label: '', product_id: '', entry_date: '', quantity: '', note: '' })
+
+  async function load() {
+    setLoading(true)
+    const [{ data: p }, { data: e }] = await Promise.all([
+      supabase.from('products').select('id, name').order('name'),
+      supabase
+        .from('raw_material_audit_entries')
+        .select('id, batch_label, product_id, entry_date, quantity, note, created_at')
+        .order('batch_label')
+        .order('entry_date'),
+    ])
+    setProducts(p || [])
+    setEntries(e || [])
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  async function submitEntry(e) {
+    e.preventDefault()
+    if (!form.batch_label.trim() || !form.product_id || !form.entry_date || !form.quantity) return
+    setSubmitting(true)
+    const { error } = await supabase.from('raw_material_audit_entries').insert({
+      batch_label: form.batch_label.trim(),
+      product_id: form.product_id,
+      entry_date: form.entry_date,
+      quantity: Number(form.quantity),
+      note: form.note || null,
+      recorded_by: currentUserId,
+    })
+    setSubmitting(false)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    setForm({ batch_label: form.batch_label, product_id: '', entry_date: form.entry_date, quantity: '', note: '' })
+    load()
+  }
+
+  async function deleteEntry(id) {
+    if (!confirm('Delete this audit entry?')) return
+    await supabase.from('raw_material_audit_entries').delete().eq('id', id)
+    load()
+  }
+
+  // Group by batch_label, preserving each batch as its own section — never mixed
+  const batches = []
+  for (const e of entries) {
+    let b = batches.find((b) => b.batch_label === e.batch_label)
+    if (!b) {
+      b = { batch_label: e.batch_label, lines: [], total: 0 }
+      batches.push(b)
+    }
+    b.lines.push(e)
+    b.total += e.quantity
+  }
+
+  if (loading) return <p>Loading…</p>
+
+  return (
+    <div className="panel">
+      <h2>Raw Material Audit</h2>
+      <p className="hint">
+        Standalone historical record of raw material arrivals, tracked by batch — for reference/tracing only.
+        Not connected to current stock in any way.
+      </p>
+
+      <form className="inline-form" onSubmit={submitEntry}>
+        <input
+          placeholder="Batch (e.g. Batch 1)"
+          value={form.batch_label}
+          onChange={(e) => setForm({ ...form, batch_label: e.target.value })}
+        />
+        <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })}>
+          <option value="">Select product</option>
+          {products.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={form.entry_date}
+          onChange={(e) => setForm({ ...form, entry_date: e.target.value })}
+        />
+        <input
+          type="number"
+          placeholder="Quantity"
+          value={form.quantity}
+          onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+        />
+        <input
+          placeholder="Note (optional)"
+          value={form.note}
+          onChange={(e) => setForm({ ...form, note: e.target.value })}
+        />
+        <button type="submit" disabled={submitting}>
+          {submitting ? 'Saving…' : 'Add entry'}
+        </button>
+      </form>
+
+      {batches.length === 0 ? (
+        <p className="hint">No audit entries yet.</p>
+      ) : (
+        batches.map((b) => (
+          <div key={b.batch_label} className="sub-panel" style={{ marginTop: 16 }}>
+            <strong>{b.batch_label}</strong> — total {b.total}
+            <table style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Product</th>
+                  <th>Quantity</th>
+                  <th>Note</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {b.lines.map((l) => (
+                  <tr key={l.id}>
+                    <td>{l.entry_date}</td>
+                    <td>{products.find((p) => p.id === l.product_id)?.name}</td>
+                    <td>{l.quantity}</td>
+                    <td>{l.note}</td>
+                    <td>
+                      <button type="button" onClick={() => deleteEntry(l.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))
+      )}
     </div>
   )
 }
