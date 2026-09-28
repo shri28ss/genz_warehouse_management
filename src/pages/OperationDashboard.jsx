@@ -1404,6 +1404,7 @@ function RtoPanel({ currentUserId }) {
 function LeakPanel({ currentUserId }) {
   const [skus, setSkus] = useState([])
   const [entries, setEntries] = useState([])
+  const [allTimeEntries, setAllTimeEntries] = useState([])
   const [form, setForm] = useState({ sku_id: '', quantity: '', note: '' })
   const [submitting, setSubmitting] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10))
@@ -1425,12 +1426,21 @@ function LeakPanel({ currentUserId }) {
     setEntries(data || [])
   }
 
+  // Cumulative, all-time total per SKU — same number Packaging Tally shows,
+  // so it's easy to see the running total right here without switching tabs.
+  async function loadAllTime() {
+    const { data } = await supabase.from('leak_entries').select('sku_id, quantity')
+    setAllTimeEntries(data || [])
+  }
+
   useEffect(() => {
     loadSkus()
+    loadAllTime()
   }, [])
 
   useEffect(() => {
     loadEntries(selectedDate)
+    loadAllTime()
   }, [selectedDate])
 
   async function submitEntry(e) {
@@ -1451,6 +1461,7 @@ function LeakPanel({ currentUserId }) {
     }
     setForm({ sku_id: '', quantity: '', note: '' })
     loadEntries(selectedDate)
+    loadAllTime()
   }
 
   function startEdit(entry) {
@@ -1470,12 +1481,19 @@ function LeakPanel({ currentUserId }) {
     }
     setEditingId(null)
     loadEntries(selectedDate)
+    loadAllTime()
   }
 
   const totalsBySku = skus.map((s) => ({
     ...s,
     total: entries.filter((r) => r.sku_id === s.id).reduce((sum, r) => sum + r.quantity, 0),
   })).filter((s) => s.total > 0)
+
+  const allTimeTotalsBySku = skus.map((s) => ({
+    ...s,
+    total: allTimeEntries.filter((r) => r.sku_id === s.id).reduce((sum, r) => sum + r.quantity, 0),
+  })).filter((s) => s.total > 0)
+  const allTimeGrandTotal = allTimeEntries.reduce((sum, r) => sum + r.quantity, 0)
 
   return (
     <div className="panel">
@@ -1485,6 +1503,20 @@ function LeakPanel({ currentUserId }) {
         only; it does not change warehouse stock. Pulled automatically into the Daily Packaging Tally / closure
         reconciliation as its own stage.
       </p>
+
+      {allTimeTotalsBySku.length > 0 && (
+        <>
+          <strong>All-time total: {allTimeGrandTotal}</strong>
+          <div className="widget-row" style={{ marginTop: 8, marginBottom: 16 }}>
+            {allTimeTotalsBySku.map((s) => (
+              <div className="widget-card" key={s.id}>
+                <span className="widget-value">{s.total}</span>
+                <span className="widget-label">{s.sku_code}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="inline-form" style={{ marginBottom: 16 }}>
         <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
@@ -1514,14 +1546,17 @@ function LeakPanel({ currentUserId }) {
       </form>
 
       {totalsBySku.length > 0 && (
-        <div className="widget-row" style={{ marginTop: 16 }}>
-          {totalsBySku.map((s) => (
-            <div className="widget-card" key={s.id}>
-              <span className="widget-value">{s.total}</span>
-              <span className="widget-label">{s.sku_code}</span>
-            </div>
-          ))}
-        </div>
+        <>
+          <strong>Total for {selectedDate}</strong>
+          <div className="widget-row" style={{ marginTop: 8, marginBottom: 16 }}>
+            {totalsBySku.map((s) => (
+              <div className="widget-card" key={s.id}>
+                <span className="widget-value">{s.total}</span>
+                <span className="widget-label">{s.sku_code}</span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       <h2>Leak Entries for {selectedDate}</h2>
