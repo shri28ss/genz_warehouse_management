@@ -1484,6 +1484,17 @@ function LeakPanel({ currentUserId }) {
     loadAllTime()
   }
 
+  async function deleteEntry(id) {
+    if (!confirm('Delete this leak entry?')) return
+    const { error } = await supabase.from('leak_entries').delete().eq('id', id)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    loadEntries(selectedDate)
+    loadAllTime()
+  }
+
   const totalsBySku = skus.map((s) => ({
     ...s,
     total: entries.filter((r) => r.sku_id === s.id).reduce((sum, r) => sum + r.quantity, 0),
@@ -1605,7 +1616,10 @@ function LeakPanel({ currentUserId }) {
                     <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
                   </>
                 ) : (
-                  <button type="button" onClick={() => startEdit(r)}>Edit</button>
+                  <>
+                    <button type="button" onClick={() => startEdit(r)}>Edit</button>
+                    <button type="button" onClick={() => deleteEntry(r.id)}>Delete</button>
+                  </>
                 )}
               </td>
             </tr>
