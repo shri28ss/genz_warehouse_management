@@ -1585,6 +1585,7 @@ function OrderLogPanel() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [dateFilter, setDateFilter] = useState('')
+  const [deletingBatch, setDeletingBatch] = useState(null)
 
   async function load(date) {
     setLoading(true)
@@ -1600,6 +1601,30 @@ function OrderLogPanel() {
   useEffect(() => {
     load(dateFilter || null)
   }, [dateFilter])
+
+  async function deleteBatch(batchKey, orderCount) {
+    if (!confirm(`Delete this batch (${orderCount} order${orderCount === 1 ? '' : 's'})? Their stock will be restored.`)) return
+    setDeletingBatch(batchKey)
+    try {
+      const { data: matchingOrders, error: findError } = await supabase
+        .from('orders')
+        .select('id')
+        .like('order_code', `${batchKey}-%`)
+      if (findError) throw findError
+      if (!matchingOrders || matchingOrders.length === 0) throw new Error('No matching orders found.')
+
+      const { error: deleteError } = await supabase.rpc('delete_orders_bulk', {
+        p_order_ids: matchingOrders.map((o) => o.id),
+      })
+      if (deleteError) throw deleteError
+
+      load(dateFilter || null)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setDeletingBatch(null)
+    }
+  }
 
   // Group rows by batch_key so each submission (Bulk/Manual Order click) is its own
   // entry, even if same date/product as another submission — its SKU-mix lines sit together
@@ -1669,6 +1694,7 @@ function OrderLogPanel() {
                 <th>Orders</th>
                 <th>Units</th>
                 <th>Total ml</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1682,6 +1708,15 @@ function OrderLogPanel() {
                   <td>{g.totalOrders}</td>
                   <td>{g.totalUnits}</td>
                   <td>{g.totalMl.toLocaleString()}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => deleteBatch(g.batch_key, g.totalOrders)}
+                      disabled={deletingBatch === g.batch_key}
+                    >
+                      {deletingBatch === g.batch_key ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
