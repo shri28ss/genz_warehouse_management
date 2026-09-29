@@ -698,6 +698,7 @@ function PackagingPanel({ currentUserId }) {
   const [closeNote, setCloseNote] = useState('')
   const [closing, setClosing] = useState(false)
   const [closeResult, setCloseResult] = useState(null)
+  const [copyingPrevDay, setCopyingPrevDay] = useState(false)
 
   // Today's date shows the live current stock (so it stays accurate while
   // entries are still being made). Any past date shows that date's frozen
@@ -754,6 +755,57 @@ function PackagingPanel({ currentUserId }) {
       .select('log_date, sku_id, sku_code, product_name, stage, total_quantity')
       .eq('log_date', date)
     setTotals(data || [])
+  }
+
+  // Copies the most recent prior date's per-SKU/stage totals into the
+  // selected date as fresh entries, so a new day starts pre-filled with
+  // yesterday's numbers instead of blank — the user only has to touch the
+  // stages that actually changed instead of re-entering everything.
+  async function copyPreviousDay() {
+    setCopyingPrevDay(true)
+    try {
+      const { data: priorDates, error: findError } = await supabase
+        .from('packaging_daily_totals')
+        .select('log_date')
+        .lt('log_date', logDate)
+        .order('log_date', { ascending: false })
+        .limit(1)
+      if (findError) throw findError
+      const prevDate = priorDates?.[0]?.log_date
+      if (!prevDate) {
+        alert('No earlier packaging data found to copy from.')
+        return
+      }
+
+      const { data: prevTotals, error: totalsError } = await supabase
+        .from('packaging_daily_totals')
+        .select('sku_id, stage, total_quantity')
+        .eq('log_date', prevDate)
+      if (totalsError) throw totalsError
+
+      const rows = (prevTotals || [])
+        .filter((t) => t.total_quantity !== 0)
+        .map((t) => ({
+          log_date: logDate,
+          sku_id: t.sku_id,
+          stage: t.stage,
+          quantity: t.total_quantity,
+          recorded_by: currentUserId,
+        }))
+      if (rows.length === 0) {
+        alert(`${prevDate} had no packaging data to copy.`)
+        return
+      }
+
+      const { error: insertError } = await supabase.from('packaging_daily_log').insert(rows)
+      if (insertError) throw insertError
+
+      loadTotals(logDate)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setCopyingPrevDay(false)
+    }
   }
 
   useEffect(() => {
@@ -897,8 +949,13 @@ function PackagingPanel({ currentUserId }) {
         counts against what's actually left in the warehouse. "Dispatched" and "Leak / damage" are read-only
         here — they're pulled automatically from the Dispatch and Leak tabs.
       </p>
-      <form className="inline-form" onSubmit={submitEntry}>
+      <div className="inline-form">
         <input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
+        <button type="button" onClick={copyPreviousDay} disabled={copyingPrevDay}>
+          {copyingPrevDay ? 'Copying…' : 'Copy previous day'}
+        </button>
+      </div>
+      <form className="inline-form" onSubmit={submitEntry}>
         <select value={skuId} onChange={(e) => setSkuId(e.target.value)}>
           <option value="">Select SKU</option>
           {skus.map((s) => (
