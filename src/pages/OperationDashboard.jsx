@@ -699,15 +699,24 @@ function PackagingPanel({ currentUserId }) {
   const [closing, setClosing] = useState(false)
   const [closeResult, setCloseResult] = useState(null)
 
-  // Live current stock — always today's actual warehouse total, regardless
-  // of which date is selected in the tally. Picking a past date only filters
-  // which packaging entries are shown/edited; the stock column itself always
-  // reflects what's in the warehouse right now.
-  async function loadStock() {
-    const { data } = await supabase.from('stock_levels').select('sku_id, quantity')
-    const map = {}
-    for (const r of data || []) map[r.sku_id] = r.quantity
-    setStockBySku(map)
+  // Today's date shows the live current stock (so it stays accurate while
+  // entries are still being made). Any past date shows that date's frozen
+  // historical balance instead — so re-opening an old date to check whether
+  // it matched still reflects what the warehouse actually had then, not
+  // whatever it happens to be right now after later RTOs/orders/edits.
+  async function loadStock(date) {
+    const isToday = date === new Date().toISOString().slice(0, 10)
+    if (isToday) {
+      const { data } = await supabase.from('stock_levels').select('sku_id, quantity')
+      const map = {}
+      for (const r of data || []) map[r.sku_id] = r.quantity
+      setStockBySku(map)
+    } else {
+      const { data } = await supabase.rpc('stock_balance_as_of', { p_date: date })
+      const map = {}
+      for (const r of data || []) map[r.sku_id] = r.quantity
+      setStockBySku(map)
+    }
   }
 
   async function loadDispatched(date) {
@@ -751,27 +760,30 @@ function PackagingPanel({ currentUserId }) {
     loadTotals(logDate)
     loadDispatched(logDate)
     loadLeak()
+    loadStock(logDate)
     setCloseResult(null)
-  }, [logDate])
 
-  useEffect(() => {
-    loadStock()
-
+    // Keep the warehouse-count column live as stock changes elsewhere in the app,
+    // but only meaningfully so when viewing today's date (a past date's historical
+    // balance shouldn't move just because realtime fires for an unrelated change).
     // Realtime is the fast path; a periodic poll is a fallback in case a realtime
     // event is ever missed (e.g. a dropped WebSocket reconnecting silently) — this
     // number feeds the Close Warehouse match check, so it must never go stale.
+    const isToday = logDate === new Date().toISOString().slice(0, 10)
+    if (!isToday) return
+
     const channel = supabase
       .channel('packaging_panel_stock_levels')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_levels' }, () => loadStock())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_levels' }, () => loadStock(logDate))
       .subscribe()
 
-    const pollInterval = setInterval(() => loadStock(), 15000)
+    const pollInterval = setInterval(() => loadStock(logDate), 15000)
 
     return () => {
       supabase.removeChannel(channel)
       clearInterval(pollInterval)
     }
-  }, [])
+  }, [logDate])
 
   async function submitEntry(e) {
     e.preventDefault()
