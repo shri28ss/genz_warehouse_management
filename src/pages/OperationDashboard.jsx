@@ -730,12 +730,14 @@ function PackagingPanel({ currentUserId }) {
     setDispatchedBySku(map)
   }
 
-  // Cumulative, all-time leak total — not scoped to the selected date. Leaked
-  // bottles stay physically in the warehouse (damaged, not discarded), so they
-  // stay part of current stock indefinitely, same as stock_levels never resets —
-  // the closure formula needs this to stay consistent with that.
-  async function loadLeak() {
-    const { data } = await supabase.from('leak_entries').select('sku_id, quantity')
+  // Cumulative leak total as of the selected date — leaked bottles stay
+  // physically in the warehouse (damaged, not discarded), so once logged
+  // they stay part of the total indefinitely, same as stock_levels never
+  // resets. But scoped to leak_date <= selected date, so logging a leak
+  // today doesn't retroactively inflate a past date's Total — same reasoning
+  // as stock_balance_as_of for the Warehouse Stock column.
+  async function loadLeak(date) {
+    const { data } = await supabase.from('leak_entries').select('sku_id, quantity').lte('leak_date', date)
     const map = {}
     for (const r of data || []) map[r.sku_id] = (map[r.sku_id] || 0) + r.quantity
     setLeakBySku(map)
@@ -811,7 +813,7 @@ function PackagingPanel({ currentUserId }) {
   useEffect(() => {
     loadTotals(logDate)
     loadDispatched(logDate)
-    loadLeak()
+    loadLeak(logDate)
     loadStock(logDate)
     setCloseResult(null)
 
