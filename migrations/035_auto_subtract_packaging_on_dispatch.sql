@@ -35,10 +35,10 @@ declare
   v_dispatched_units integer := 0;
   v_dispatched_orders integer := 0;
   v_remaining integer;
-  v_stage text;
+  v_stage packaging_stage;
   v_available integer;
   v_take integer;
-  v_stages text[] := array['box_bubble_wrap', 'box_labeled', 'box_packed', 'bottle_bubble_wrap', 'bottle_plastic_wrap', 'raw_unpacked'];
+  v_stages packaging_stage[] := array['box_bubble_wrap', 'box_labeled', 'box_packed', 'bottle_bubble_wrap', 'bottle_plastic_wrap', 'raw_unpacked']::packaging_stage[];
 begin
   if p_scan_fail_count < 0 then
     raise exception 'Scan-fail count cannot be negative';
@@ -100,7 +100,7 @@ begin
 
     if v_remaining > 0 then
       insert into packaging_daily_log (log_date, sku_id, stage, quantity, recorded_by)
-      values (p_date, p_sku_id, 'box_bubble_wrap', -v_remaining, p_actor_id);
+      values (p_date, p_sku_id, 'box_bubble_wrap'::packaging_stage, -v_remaining, p_actor_id);
     end if;
   end if;
 
