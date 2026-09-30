@@ -9,10 +9,11 @@
 --
 -- Fix: when reconcile_and_dispatch marks orders dispatched, also insert
 -- negative packaging_daily_log entries for the dispatched quantity,
--- taken from the latest (closest-to-dispatch) stage first and cascading
--- backward through earlier stages if that stage doesn't have enough
--- logged for the day — so the pipeline's running total stays honest
--- without ever going negative on a single stage unnecessarily.
+-- taken from box_bubble_wrap first (the stage dispatched bottles are
+-- actually pulled from) and cascading through the other stages if that
+-- one doesn't have enough logged for the day — so the pipeline's
+-- running total stays honest without ever going negative on a single
+-- stage unnecessarily.
 -- ============================================================
 
 create or replace function reconcile_and_dispatch(
@@ -37,7 +38,7 @@ declare
   v_stage text;
   v_available integer;
   v_take integer;
-  v_stages text[] := array['box_labeled', 'box_bubble_wrap', 'box_packed', 'bottle_bubble_wrap', 'bottle_plastic_wrap', 'raw_unpacked'];
+  v_stages text[] := array['box_bubble_wrap', 'box_labeled', 'box_packed', 'bottle_bubble_wrap', 'bottle_plastic_wrap', 'raw_unpacked'];
 begin
   if p_scan_fail_count < 0 then
     raise exception 'Scan-fail count cannot be negative';
@@ -99,7 +100,7 @@ begin
 
     if v_remaining > 0 then
       insert into packaging_daily_log (log_date, sku_id, stage, quantity, recorded_by)
-      values (p_date, p_sku_id, 'box_labeled', -v_remaining, p_actor_id);
+      values (p_date, p_sku_id, 'box_bubble_wrap', -v_remaining, p_actor_id);
     end if;
   end if;
 
