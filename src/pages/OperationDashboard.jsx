@@ -1752,6 +1752,7 @@ function OrderLogPanel() {
       group = {
         batch_key: r.batch_key,
         order_date: r.order_date,
+        batch_created_at: r.batch_created_at,
         product_name: r.product_name,
         lines: [],
         totalOrders: 0,
@@ -1786,6 +1787,7 @@ function OrderLogPanel() {
               filename={`order-log${dateFilter ? '-' + dateFilter : ''}`}
               rows={grouped.map((g) => ({
                 date: g.order_date,
+                time: g.batch_created_at ? new Date(g.batch_created_at).toLocaleTimeString() : '',
                 product: g.product_name,
                 bottle_mix: g.lines.map((l) => `${l.sku_code} x ${l.bottle_count}`).join('; '),
                 orders: g.totalOrders,
@@ -1794,6 +1796,7 @@ function OrderLogPanel() {
               }))}
               columns={[
                 { key: 'date', label: 'Date' },
+                { key: 'time', label: 'Time' },
                 { key: 'product', label: 'Product' },
                 { key: 'bottle_mix', label: 'Bottle Mix' },
                 { key: 'orders', label: 'Orders' },
@@ -1806,6 +1809,7 @@ function OrderLogPanel() {
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Time</th>
                 <th>Product</th>
                 <th>Bottle mix</th>
                 <th>Orders</th>
@@ -1818,6 +1822,7 @@ function OrderLogPanel() {
               {grouped.map((g) => (
                 <tr key={g.batch_key}>
                   <td>{g.order_date}</td>
+                  <td>{g.batch_created_at ? new Date(g.batch_created_at).toLocaleTimeString() : ''}</td>
                   <td>{g.product_name}</td>
                   <td>
                     {g.lines.map((l) => `${l.sku_code} × ${l.bottle_count}`).join(', ')}
