@@ -387,6 +387,23 @@ function RawStockPanel({ currentUserId }) {
   const [editingBatchId, setEditingBatchId] = useState(null)
   const [editTotal, setEditTotal] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [summaryDate, setSummaryDate] = useState(new Date().toISOString().slice(0, 10))
+  const [summaryRows, setSummaryRows] = useState([])
+  const [summaryLoading, setSummaryLoading] = useState(false)
+
+  async function loadSummary(date) {
+    setSummaryLoading(true)
+    const { data } = await supabase
+      .from('raw_stock_batches')
+      .select('sku_id, total_units')
+      .eq('received_date', date)
+    setSummaryRows(data || [])
+    setSummaryLoading(false)
+  }
+
+  useEffect(() => {
+    loadSummary(summaryDate)
+  }, [summaryDate])
 
   async function load() {
     setLoading(true)
@@ -394,7 +411,7 @@ function RawStockPanel({ currentUserId }) {
       supabase.from('skus').select('id, sku_code, units_per_box').eq('is_active', true).order('sku_code'),
       supabase
         .from('raw_stock_batches')
-        .select('id, sku_id, box_count, loose_units, units_per_box_at_time, total_units, received_date, supplier_note')
+        .select('id, sku_id, box_count, loose_units, units_per_box_at_time, total_units, received_date, supplier_note, created_at')
         .order('received_date', { ascending: false })
         .limit(30),
     ])
@@ -484,8 +501,54 @@ function RawStockPanel({ currentUserId }) {
 
   if (loading) return <p>Loading…</p>
 
+  // Per-SKU totals for the selected date — how much raw stock came in that day,
+  // summed across every batch logged for it (a day can have multiple batches/SKUs).
+  // Queried independently of the capped recent-batches list so older dates stay accurate.
+  const summaryForDate = skus
+    .map((s) => {
+      const dayBatches = summaryRows.filter((b) => b.sku_id === s.id)
+      if (dayBatches.length === 0) return null
+      return {
+        sku_id: s.id,
+        sku_code: s.sku_code,
+        batchCount: dayBatches.length,
+        totalUnits: dayBatches.reduce((sum, b) => sum + b.total_units, 0),
+      }
+    })
+    .filter(Boolean)
+
   return (
     <div className="panel">
+      <h2>Daily Inward Summary</h2>
+      <p className="hint">Pick a date to see total raw stock received that day, per SKU (across all batches logged for it).</p>
+      <div className="inline-form" style={{ marginBottom: 8 }}>
+        <input type="date" value={summaryDate} onChange={(e) => setSummaryDate(e.target.value)} />
+      </div>
+      {summaryLoading ? (
+        <p>Loading…</p>
+      ) : summaryForDate.length === 0 ? (
+        <p className="hint">No raw stock logged for {summaryDate}.</p>
+      ) : (
+        <table style={{ marginBottom: 24 }}>
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Batches</th>
+              <th>Total units received</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summaryForDate.map((row) => (
+              <tr key={row.sku_id}>
+                <td>{row.sku_code}</td>
+                <td>{row.batchCount}</td>
+                <td>{row.totalUnits}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
       <h2>Log Raw Stock Arrival</h2>
       <form className="inline-form" onSubmit={submitBatch}>
         <select value={form.sku_id} onChange={(e) => setForm({ ...form, sku_id: e.target.value })}>
@@ -530,6 +593,7 @@ function RawStockPanel({ currentUserId }) {
           filename="raw-stock-batches"
           rows={batches.map((b) => ({
             date: b.received_date,
+            time: b.created_at ? new Date(b.created_at).toLocaleTimeString() : '',
             sku: skus.find((s) => s.id === b.sku_id)?.sku_code || b.sku_id,
             boxes: b.box_count,
             loose_units: b.loose_units,
@@ -539,6 +603,7 @@ function RawStockPanel({ currentUserId }) {
           }))}
           columns={[
             { key: 'date', label: 'Date' },
+            { key: 'time', label: 'Time' },
             { key: 'sku', label: 'SKU' },
             { key: 'boxes', label: 'Boxes' },
             { key: 'loose_units', label: 'Loose Units' },
@@ -553,6 +618,7 @@ function RawStockPanel({ currentUserId }) {
           <tr>
             <th></th>
             <th>Date</th>
+            <th>Time</th>
             <th>SKU</th>
             <th>Boxes</th>
             <th>Loose units</th>
@@ -573,6 +639,7 @@ function RawStockPanel({ currentUserId }) {
                 />
               </td>
               <td>{b.received_date}</td>
+              <td>{b.created_at ? new Date(b.created_at).toLocaleTimeString() : ''}</td>
               <td>{skus.find((s) => s.id === b.sku_id)?.sku_code || b.sku_id}</td>
               <td>{b.box_count}</td>
               <td>{b.loose_units}</td>
