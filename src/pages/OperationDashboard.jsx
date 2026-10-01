@@ -120,6 +120,8 @@ const PACKAGING_STAGES = [
   { value: 'dispatched', label: 'Dispatched' },
 ]
 
+const COURIER_OPTIONS = ['Ekart', 'Delhivery', 'Shadowfax', 'DTDC']
+
 function BulkOrderPanel({ currentUserId }) {
   const [skus, setSkus] = useState([])
   const [products, setProducts] = useState([])
@@ -128,6 +130,7 @@ function BulkOrderPanel({ currentUserId }) {
   const [orderedProductId, setOrderedProductId] = useState('') // "order variety": which product was ordered
   const [orderedLitres, setOrderedLitres] = useState('') // volume ordered, in litres (supports 3L, 4L, 7L, etc.)
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
+  const [courier, setCourier] = useState('')
   const [bulkCount, setBulkCount] = useState('')
   const [bulkMix, setBulkMix] = useState([]) // [{ sku_id, quantity }] — how it's actually packed
   const [bulkMixDraft, setBulkMixDraft] = useState({ sku_id: '', quantity: '' })
@@ -200,6 +203,7 @@ function BulkOrderPanel({ currentUserId }) {
         p_mix: bulkMix.map((l) => ({ sku_id: l.sku_id, quantity: l.quantity })),
         p_created_by: currentUserId,
         p_order_date: orderDate,
+        p_courier: courier || null,
       })
       if (error) throw error
 
@@ -208,6 +212,7 @@ function BulkOrderPanel({ currentUserId }) {
       setBulkMix([])
       setOrderedProductId('')
       setOrderedLitres('')
+      setCourier('')
     } catch (err) {
       setLastResult({ ok: false, message: err.message })
     } finally {
@@ -281,7 +286,7 @@ function BulkOrderPanel({ currentUserId }) {
 
       {mixMatches && (
         <div className="sub-panel" style={{ marginTop: 8 }}>
-          <strong>3. How many orders, and on which date</strong>
+          <strong>3. How many orders, on which date, and courier</strong>
           <form className="inline-form" onSubmit={submitBulkFulfill}>
             <input
               type="number"
@@ -290,6 +295,12 @@ function BulkOrderPanel({ currentUserId }) {
               onChange={(e) => setBulkCount(e.target.value)}
             />
             <input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
+            <select value={courier} onChange={(e) => setCourier(e.target.value)}>
+              <option value="">Select courier</option>
+              {COURIER_OPTIONS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
             <button type="submit" disabled={bulkSubmitting || !bulkCount}>
               {bulkSubmitting ? 'Creating…' : `Create & fulfill ${bulkCount || 0} orders`}
             </button>
@@ -313,6 +324,7 @@ function ManualOrderPanel({ currentUserId }) {
   const [orderedProductId, setOrderedProductId] = useState('')
   const [orderedLitres, setOrderedLitres] = useState('')
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
+  const [courier, setCourier] = useState('')
   const [mix, setMix] = useState([]) // [{ sku_id, quantity }]
   const [mixDraft, setMixDraft] = useState({ sku_id: '', quantity: '' })
   const [creating, setCreating] = useState(false)
@@ -386,12 +398,14 @@ function ManualOrderPanel({ currentUserId }) {
         p_mix: mix.map((l) => ({ sku_id: l.sku_id, quantity: l.quantity })),
         p_created_by: currentUserId,
         p_order_date: orderDate,
+        p_courier: courier || null,
       })
       if (error) throw error
 
       setOrderedProductId('')
       setOrderedLitres('')
       setMix([])
+      setCourier('')
       load()
     } catch (err) {
       setCreateError(err.message)
@@ -515,6 +529,12 @@ function ManualOrderPanel({ currentUserId }) {
             onChange={(e) => setOrderedLitres(e.target.value)}
           />
           <input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
+          <select value={courier} onChange={(e) => setCourier(e.target.value)}>
+            <option value="">Select courier</option>
+            {COURIER_OPTIONS.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
         </div>
 
         {orderedProductId && requestedMl > 0 && (
@@ -1703,16 +1723,33 @@ function OrderLogPanel() {
   const [loading, setLoading] = useState(true)
   const [dateFilter, setDateFilter] = useState('')
   const [deletingBatch, setDeletingBatch] = useState(null)
+  const [savingCourier, setSavingCourier] = useState(null)
 
   async function load(date) {
     setLoading(true)
     let query = supabase
       .from('order_log_summary')
-      .select('batch_key, batch_created_at, order_date, product_name, sku_code, size_ml, order_count, bottle_count, total_ml')
+      .select('batch_key, batch_created_at, order_date, courier, product_name, sku_code, size_ml, order_count, bottle_count, total_ml')
     if (date) query = query.eq('order_date', date)
     const { data } = await query.order('batch_created_at', { ascending: false })
     setRows(data || [])
     setLoading(false)
+  }
+
+  async function updateCourier(batchKey, newCourier) {
+    setSavingCourier(batchKey)
+    try {
+      const { error } = await supabase.rpc('set_batch_courier', {
+        p_batch_key: batchKey,
+        p_courier: newCourier || null,
+      })
+      if (error) throw error
+      load(dateFilter || null)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setSavingCourier(null)
+    }
   }
 
   useEffect(() => {
@@ -1753,6 +1790,7 @@ function OrderLogPanel() {
         batch_key: r.batch_key,
         order_date: r.order_date,
         batch_created_at: r.batch_created_at,
+        courier: r.courier,
         product_name: r.product_name,
         lines: [],
         totalOrders: 0,
@@ -1793,6 +1831,7 @@ function OrderLogPanel() {
                 orders: g.totalOrders,
                 units: g.totalUnits,
                 total_ml: g.totalMl,
+                courier: g.courier || '',
               }))}
               columns={[
                 { key: 'date', label: 'Date' },
@@ -1802,6 +1841,7 @@ function OrderLogPanel() {
                 { key: 'orders', label: 'Orders' },
                 { key: 'units', label: 'Units' },
                 { key: 'total_ml', label: 'Total ml' },
+                { key: 'courier', label: 'Courier' },
               ]}
             />
           </div>
@@ -1815,6 +1855,7 @@ function OrderLogPanel() {
                 <th>Orders</th>
                 <th>Units</th>
                 <th>Total ml</th>
+                <th>Courier</th>
                 <th></th>
               </tr>
             </thead>
@@ -1830,6 +1871,18 @@ function OrderLogPanel() {
                   <td>{g.totalOrders}</td>
                   <td>{g.totalUnits}</td>
                   <td>{g.totalMl.toLocaleString()}</td>
+                  <td>
+                    <select
+                      value={g.courier || ''}
+                      onChange={(e) => updateCourier(g.batch_key, e.target.value)}
+                      disabled={savingCourier === g.batch_key}
+                    >
+                      <option value="">—</option>
+                      {COURIER_OPTIONS.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td>
                     <button
                       type="button"
