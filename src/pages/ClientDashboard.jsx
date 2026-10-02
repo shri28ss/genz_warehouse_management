@@ -11,18 +11,40 @@ export default function ClientDashboard() {
   const [dispatchSummary, setDispatchSummary] = useState([])
   const [loadingDispatch, setLoadingDispatch] = useState(true)
 
+  // Today's date shows live current stock. Any past date shows that date's
+  // frozen historical balance (via stock_balance_as_of), so picking an
+  // earlier date doesn't retroactively show stock that only arrived later —
+  // same reasoning as the Operation dashboard's Packaging Tally.
   useEffect(() => {
     async function loadStock() {
       setLoadingStock(true)
-      const { data } = await supabase
-        .from('stock_levels')
-        .select('sku_id, quantity, skus(sku_code, size_ml, products(name))')
-        .order('sku_id')
-      setStock(data || [])
+      const { data: skuRows } = await supabase
+        .from('skus')
+        .select('id, sku_code, size_ml, products(name)')
+        .eq('is_active', true)
+        .order('id')
+
+      const isToday = selectedDate === new Date().toISOString().slice(0, 10)
+      let quantityBySku = {}
+      if (isToday) {
+        const { data } = await supabase.from('stock_levels').select('sku_id, quantity')
+        for (const r of data || []) quantityBySku[r.sku_id] = r.quantity
+      } else {
+        const { data } = await supabase.rpc('stock_balance_as_of', { p_date: selectedDate })
+        for (const r of data || []) quantityBySku[r.sku_id] = r.quantity
+      }
+
+      setStock(
+        (skuRows || []).map((s) => ({
+          sku_id: s.id,
+          quantity: quantityBySku[s.id] ?? 0,
+          skus: { sku_code: s.sku_code, size_ml: s.size_ml, products: s.products },
+        }))
+      )
       setLoadingStock(false)
     }
     loadStock()
-  }, [])
+  }, [selectedDate])
 
   useEffect(() => {
     async function loadDispatch() {
