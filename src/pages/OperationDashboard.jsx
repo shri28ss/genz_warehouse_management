@@ -474,6 +474,20 @@ function ManualOrderPanel({ currentUserId }) {
 
   async function markDispatched(order) {
     await supabase.from('orders').update({ status: 'dispatched', updated_at: new Date().toISOString() }).eq('id', order.id)
+
+    // Mirror what reconcile_and_dispatch does for Bulk Order dispatches —
+    // this button is a separate manual path that was bypassing the
+    // box_bubble_wrap cascade-subtract, leaving Total above Warehouse Stock.
+    const orderDate = new Date(order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+    for (const line of order.order_lines) {
+      await supabase.rpc('subtract_packaging_cascade', {
+        p_sku_id: line.sku_id,
+        p_date: orderDate,
+        p_amount: line.quantity,
+        p_actor_id: currentUserId,
+      })
+    }
+
     load()
   }
 
