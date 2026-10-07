@@ -836,6 +836,7 @@ function PackagingPanel({ currentUserId }) {
       const { error: insertError } = await supabase.from('packaging_daily_log').insert(rows)
       if (insertError) throw insertError
 
+      setCloseResult(null)
       loadTotals(logDate)
     } catch (err) {
       alert(err.message)
@@ -972,6 +973,7 @@ function PackagingPanel({ currentUserId }) {
     }
     setSavingEdit(false)
     setEditingCell(null)
+    setCloseResult(null)
     loadTotals(logDate)
   }
 
