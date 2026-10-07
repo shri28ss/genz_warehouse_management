@@ -1083,8 +1083,14 @@ function PackagingPanel({ currentUserId }) {
                     )
                   }
                   return (
-                    <td key={stg.value} onClick={() => startEdit(s.id, stg.value)} style={{ cursor: 'pointer' }} title="Click to edit">
+                    <td
+                      key={stg.value}
+                      onClick={() => startEdit(s.id, stg.value)}
+                      style={{ cursor: 'pointer', color: value < 0 ? 'crimson' : undefined }}
+                      title={value < 0 ? 'Negative — more was taken out of this stage than was logged into it. Check for missing packaging entries.' : 'Click to edit'}
+                    >
                       {value}
+                      {value < 0 && ' ⚠'}
                     </td>
                   )
                 })}
