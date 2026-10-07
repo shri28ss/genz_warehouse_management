@@ -454,7 +454,10 @@ function ManualOrderPanel({ currentUserId }) {
       alert(`Volume mismatch: requested ${order.requested_ml}ml, chosen bottles total ${fulfilled}ml. They must be equal.`)
       return
     }
-    // Deduct stock for each line, then mark order fulfilled
+    // A bottle leaves the "available in warehouse" pool the moment it's
+    // packed into a fulfilled order, not only once dispatched — so deduct
+    // stock AND the packaging pipeline total for each line here.
+    const orderDate = new Date(order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
     for (const line of order.order_lines) {
       const { error } = await supabase.from('stock_movements').insert({
         sku_id: line.sku_id,
@@ -467,19 +470,6 @@ function ManualOrderPanel({ currentUserId }) {
         alert(`Stock deduction failed: ${error.message}`)
         return
       }
-    }
-    await supabase.from('orders').update({ status: 'fulfilled', updated_at: new Date().toISOString() }).eq('id', order.id)
-    load()
-  }
-
-  async function markDispatched(order) {
-    await supabase.from('orders').update({ status: 'dispatched', updated_at: new Date().toISOString() }).eq('id', order.id)
-
-    // Mirror what reconcile_and_dispatch does for Bulk Order dispatches —
-    // this button is a separate manual path that was bypassing the
-    // box_bubble_wrap cascade-subtract, leaving Total above Warehouse Stock.
-    const orderDate = new Date(order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
-    for (const line of order.order_lines) {
       await supabase.rpc('subtract_packaging_cascade', {
         p_sku_id: line.sku_id,
         p_date: orderDate,
@@ -487,7 +477,12 @@ function ManualOrderPanel({ currentUserId }) {
         p_actor_id: currentUserId,
       })
     }
+    await supabase.from('orders').update({ status: 'fulfilled', updated_at: new Date().toISOString() }).eq('id', order.id)
+    load()
+  }
 
+  async function markDispatched(order) {
+    await supabase.from('orders').update({ status: 'dispatched', updated_at: new Date().toISOString() }).eq('id', order.id)
     load()
   }
 
