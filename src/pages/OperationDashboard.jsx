@@ -322,6 +322,7 @@ function ManualOrderPanel({ currentUserId }) {
   const [loading, setLoading] = useState(true)
 
   const [orderedProductId, setOrderedProductId] = useState('')
+  const [isCustomOrder, setIsCustomOrder] = useState(false)
   const [orderedLitres, setOrderedLitres] = useState('')
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10))
   const [courier, setCourier] = useState('')
@@ -358,7 +359,8 @@ function ManualOrderPanel({ currentUserId }) {
   }, [])
 
   const requestedMl = orderedLitres ? Math.round(Number(orderedLitres) * 1000) : 0
-  const packOptions = orderedProductId ? skus.filter((s) => s.product_id === orderedProductId) : []
+  const packOptions = isCustomOrder ? skus : orderedProductId ? skus.filter((s) => s.product_id === orderedProductId) : []
+  const readyToMix = isCustomOrder ? requestedMl > 0 : orderedProductId && requestedMl > 0
   const mixMl = mix.reduce((sum, line) => {
     const sku = skus.find((s) => s.id === line.sku_id)
     return sum + (sku ? sku.size_ml * line.quantity : 0)
@@ -367,6 +369,12 @@ function ManualOrderPanel({ currentUserId }) {
 
   function selectOrderedProduct(id) {
     setOrderedProductId(id)
+    setMix([])
+  }
+
+  function toggleCustomOrder(checked) {
+    setIsCustomOrder(checked)
+    setOrderedProductId('')
     setMix([])
   }
 
@@ -392,8 +400,11 @@ function ManualOrderPanel({ currentUserId }) {
     setCreating(true)
     setCreateError('')
     try {
+      const codePrefix = isCustomOrder
+        ? 'CUSTOM'
+        : products.find((p) => p.id === orderedProductId)?.name.replace(/\s+/g, '-').toUpperCase() || 'ORDER'
       const { error } = await supabase.rpc('bulk_fulfill_orders', {
-        p_order_code_prefix: products.find((p) => p.id === orderedProductId)?.name.replace(/\s+/g, '-').toUpperCase() || 'ORDER',
+        p_order_code_prefix: codePrefix,
         p_count: 1,
         p_mix: mix.map((l) => ({ sku_id: l.sku_id, quantity: l.quantity })),
         p_created_by: currentUserId,
@@ -403,6 +414,7 @@ function ManualOrderPanel({ currentUserId }) {
       if (error) throw error
 
       setOrderedProductId('')
+      setIsCustomOrder(false)
       setOrderedLitres('')
       setMix([])
       setCourier('')
@@ -523,13 +535,23 @@ function ManualOrderPanel({ currentUserId }) {
       <h2>New Single Order</h2>
 
       <div className="sub-panel">
+        <label className="inline-form" style={{ alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={isCustomOrder}
+            onChange={(e) => toggleCustomOrder(e.target.checked)}
+          />
+          Custom order (mix bottles from different products)
+        </label>
         <div className="inline-form">
-          <select value={orderedProductId} onChange={(e) => selectOrderedProduct(e.target.value)}>
-            <option value="">Select product</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          {!isCustomOrder && (
+            <select value={orderedProductId} onChange={(e) => selectOrderedProduct(e.target.value)}>
+              <option value="">Select product</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
           <input
             type="number"
             step="0.5"
@@ -546,7 +568,7 @@ function ManualOrderPanel({ currentUserId }) {
           </select>
         </div>
 
-        {orderedProductId && requestedMl > 0 && (
+        {readyToMix && (
           <>
             <div className="inline-form" style={{ marginTop: 8 }}>
               <select
@@ -555,7 +577,9 @@ function ManualOrderPanel({ currentUserId }) {
               >
                 <option value="">Select bottle to pack with</option>
                 {packOptions.map((s) => (
-                  <option key={s.id} value={s.id}>{s.sku_code} ({s.size_ml}ml)</option>
+                  <option key={s.id} value={s.id}>
+                    {isCustomOrder ? `${s.products?.name} — ${s.sku_code} (${s.size_ml}ml)` : `${s.sku_code} (${s.size_ml}ml)`}
+                  </option>
                 ))}
               </select>
               <input
