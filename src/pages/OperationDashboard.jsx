@@ -793,6 +793,20 @@ function PackagingPanel({ currentUserId }) {
   // yesterday's numbers instead of blank — the user only has to touch the
   // stages that actually changed instead of re-entering everything.
   async function copyPreviousDay() {
+    // Guard against double-clicking or re-running this on a date that
+    // already has entries — it would duplicate every stage's total on top
+    // of what's already there instead of starting from a clean baseline.
+    const { count: existingCount } = await supabase
+      .from('packaging_daily_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('log_date', logDate)
+    if (existingCount > 0) {
+      const proceed = confirm(
+        `${logDate} already has packaging entries. Running "Copy previous day" again will ADD another full copy on top, not replace it, and likely cause a mismatch. Continue anyway?`
+      )
+      if (!proceed) return
+    }
+
     setCopyingPrevDay(true)
     try {
       const { data: priorDates, error: findError } = await supabase
