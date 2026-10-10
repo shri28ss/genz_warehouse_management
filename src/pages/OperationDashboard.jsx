@@ -477,6 +477,7 @@ function ManualOrderPanel({ currentUserId }) {
         quantity_change: -line.quantity,
         reference_order_id: order.id,
         created_by: currentUserId,
+        created_at: order.created_at,
       })
       if (error) {
         alert(`Stock deduction failed: ${error.message}`)
