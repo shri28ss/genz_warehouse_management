@@ -16,7 +16,7 @@ export default function OperationDashboard() {
           Bulk Order
         </button>
         <button className={tab === 'manual-order' ? 'active' : ''} onClick={() => setTab('manual-order')}>
-          Manual Entry
+          Custom Order
         </button>
         <button className={tab === 'packaging' ? 'active' : ''} onClick={() => setTab('packaging')}>
           Daily Packaging Tally
@@ -533,7 +533,7 @@ function ManualOrderPanel({ currentUserId }) {
 
   return (
     <div className="panel">
-      <h2>New Single Order</h2>
+      <h2>Custom Order</h2>
 
       <div className="sub-panel">
         <label className="inline-form" style={{ alignItems: 'center' }}>
