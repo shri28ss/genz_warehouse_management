@@ -10,8 +10,10 @@ const PACKAGING_STAGES = [
   { value: 'box_packed', label: 'Box packed' },
   { value: 'box_bubble_wrap', label: 'Box bubble wrap' },
   { value: 'box_labeled', label: 'Box labeled' },
+  { value: 'leak', label: 'Leak / damage' },
   { value: 'dispatched', label: 'Dispatched' },
 ]
+const IN_WAREHOUSE_STAGES = PACKAGING_STAGES.filter((s) => s.value !== 'dispatched')
 
 export default function ClientDashboard() {
   const [stock, setStock] = useState([])
@@ -233,6 +235,8 @@ function ClientPackagingTally() {
   const [skus, setSkus] = useState([])
   const [totals, setTotals] = useState([])
   const [stockBySku, setStockBySku] = useState({})
+  const [dispatchedBySku, setDispatchedBySku] = useState({})
+  const [leakBySku, setLeakBySku] = useState({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -252,6 +256,23 @@ function ClientPackagingTally() {
         .eq('log_date', logDate)
       setTotals(data || [])
 
+      const { data: dispatched } = await supabase
+        .from('scan_fail_summary')
+        .select('sku_id, total_units')
+        .eq('order_date', logDate)
+      const dispatchedMap = {}
+      for (const r of dispatched || []) dispatchedMap[r.sku_id] = r.total_units
+      setDispatchedBySku(dispatchedMap)
+
+      // Cumulative leak total as of the selected date — same reasoning as the
+      // Operation dashboard: leaked bottles stay in the warehouse indefinitely,
+      // but scoped to leak_date <= selected date so a leak logged today doesn't
+      // retroactively inflate a past date's Total.
+      const { data: leak } = await supabase.from('leak_entries').select('sku_id, quantity').lte('leak_date', logDate)
+      const leakMap = {}
+      for (const r of leak || []) leakMap[r.sku_id] = (leakMap[r.sku_id] || 0) + r.quantity
+      setLeakBySku(leakMap)
+
       const isToday = logDate === new Date().toISOString().slice(0, 10)
       if (isToday) {
         const { data: live } = await supabase.from('stock_levels').select('sku_id, quantity')
@@ -270,14 +291,15 @@ function ClientPackagingTally() {
   }, [logDate])
 
   function currentTotal(skuId, stage) {
+    if (stage === 'dispatched') return dispatchedBySku[skuId] || 0
+    if (stage === 'leak') return leakBySku[skuId] || 0
     return totals.find((t) => t.sku_id === skuId && t.stage === stage)?.total_quantity || 0
   }
 
+  // "Total" = what's still physically in the warehouse (raw + all packaging
+  // stages + leak). Dispatched is excluded — those bottles already left.
   function rowTotal(skuId) {
-    return PACKAGING_STAGES.filter((s) => s.value !== 'dispatched').reduce(
-      (sum, s) => sum + currentTotal(skuId, s.value),
-      0
-    )
+    return IN_WAREHOUSE_STAGES.reduce((sum, s) => sum + currentTotal(skuId, s.value), 0)
   }
 
   return (
