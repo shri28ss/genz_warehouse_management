@@ -818,57 +818,26 @@ function PackagingPanel({ currentUserId }) {
   // yesterday's numbers instead of blank — the user only has to touch the
   // stages that actually changed instead of re-entering everything.
   async function copyPreviousDay() {
-    // Guard against double-clicking or re-running this on a date that
-    // already has entries — it would duplicate every stage's total on top
-    // of what's already there instead of starting from a clean baseline.
-    const { count: existingCount } = await supabase
-      .from('packaging_daily_log')
-      .select('id', { count: 'exact', head: true })
-      .eq('log_date', logDate)
-    if (existingCount > 0) {
-      const proceed = confirm(
-        `${logDate} already has packaging entries. Running "Copy previous day" again will ADD another full copy on top, not replace it, and likely cause a mismatch. Continue anyway?`
-      )
-      if (!proceed) return
-    }
-
+    // Delegates to a server-side RPC that's race-safe by construction (an
+    // advisory lock serializes concurrent calls for the same date) — the
+    // old client-side "check then insert" was a TOCTOU race if clicked
+    // twice quickly, and its confirm-to-proceed warning didn't actually
+    // stop a duplicate copy if the user clicked through it. Both caused
+    // the same baseline to get copied twice, doubling every stage's total
+    // and breaking the Total-vs-Warehouse-Stock match — this happened
+    // repeatedly. The RPC makes it simply impossible to double up.
     setCopyingPrevDay(true)
     try {
-      const { data: priorDates, error: findError } = await supabase
-        .from('packaging_daily_totals')
-        .select('log_date')
-        .lt('log_date', logDate)
-        .order('log_date', { ascending: false })
-        .limit(1)
-      if (findError) throw findError
-      const prevDate = priorDates?.[0]?.log_date
-      if (!prevDate) {
-        alert('No earlier packaging data found to copy from.')
+      const { data, error } = await supabase.rpc('copy_previous_day_packaging', {
+        p_date: logDate,
+        p_actor_id: currentUserId,
+      })
+      if (error) throw error
+      const result = data?.[0]
+      if (!result?.copied) {
+        alert(`${logDate} already has packaging entries (or there's no earlier date to copy from) — nothing to copy. Edit the totals directly if you need to correct them.`)
         return
       }
-
-      const { data: prevTotals, error: totalsError } = await supabase
-        .from('packaging_daily_totals')
-        .select('sku_id, stage, total_quantity')
-        .eq('log_date', prevDate)
-      if (totalsError) throw totalsError
-
-      const rows = (prevTotals || [])
-        .filter((t) => t.total_quantity !== 0)
-        .map((t) => ({
-          log_date: logDate,
-          sku_id: t.sku_id,
-          stage: t.stage,
-          quantity: t.total_quantity,
-          recorded_by: currentUserId,
-        }))
-      if (rows.length === 0) {
-        alert(`${prevDate} had no packaging data to copy.`)
-        return
-      }
-
-      const { error: insertError } = await supabase.from('packaging_daily_log').insert(rows)
-      if (insertError) throw insertError
 
       setCloseResult(null)
       loadTotals(logDate)
